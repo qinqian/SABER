@@ -1,0 +1,32 @@
+channels:
+ - r
+ - bioconda
+ - conda-forge
+ - chasehere
+dependencies:
+ - r
+ - bioconductor-crisprvariants
+ - bioconductor-rsamtools
+ - bioconductor-rtracklayer
+ - bioconductor-GenomicFeatures
+ - bioconductor-sangerseqr
+ - r-gridextra
+ - r-rcolorbrewer
+   # - r-rpython conda conflict
+ - python=2.7
+ - r-sqldf
+ - r-foreach
+ - r-doparallel
+ - r-stringr
+ - r-cowplot
+ - r-reshape2
+ - r-ggdendro
+ - r-scales
+ - r-viridis
+ - r-ggextra
+ - r-tidyverse
+ - r-ggrepel
+ - r-boot
+ - r-plotly
+
+ 
