@@ -1,0 +1,6 @@
+output_prefix: SABER
+use_umi: false
+#variant_read_cutoff: 20000
+#
+# Uncomment below to set tvaf
+# tvaf: 0.01

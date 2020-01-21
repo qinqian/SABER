@@ -28,5 +28,4 @@ dependencies:
  - r-ggrepel
  - r-boot
  - r-plotly
-
- 
+ - r-yaml

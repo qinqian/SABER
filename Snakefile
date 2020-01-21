@@ -1,7 +1,7 @@
 import glob
 import os.path
 import re
-configfile: "config.json"
+configfile: "config.yaml"
 #load samples from fastq folder
 #samples<-list.files(paste0(getwd(),"/fastq")) # loads all files in the fastq folder
 #samples_fp<-paste0(getwd(),"/fastq/",samples)
@@ -102,12 +102,12 @@ rule cutadapt5p:
     input:"{project}_output/fastq_trimmed/{sample}.trimmed.fastq"
     output:"{project}_output/cutadapt5p/{sample}.fastq"
     params:
-        adapter= "XCGCAGAGAGGCTCCGTG" if config["use_umi"] else "XTCGAGCTCAAGCTTCGG" 
+        adapter= "XCGCAGAGAGGCTCCGTG" if config["use_umi"] else "XTCGAGCTCAAGCTTCGG"
     conda:"envs/tools-env.yaml"
     #changed to allow full adapter sequence anywhere to accomodate UMI.  If this doesn't work change X to ^.
     shell:"cutadapt -g {params.adapter} --discard-untrimmed -e 0.01 --action=none -o {output} {input}"
 
-#3 prime adapter = V6/7R:  GACCTCGAGACAAATGGCAG (reverse complement of the primer sequence 5'-3')    
+#3 prime adapter = V6/7R:  GACCTCGAGACAAATGGCAG (reverse complement of the primer sequence 5'-3')
 rule cutadapt3p:
     input:"{project}_output/cutadapt5p/{sample}.fastq"
     output:"{project}_output/cutadapt3p/{sample}.fastq"
@@ -172,14 +172,11 @@ rule analysis:
     input:umi_bam_switch
     output:touch("{project}_output/SABER/analysis.done")
     conda:"envs/r-env.yaml"
-    params: 
+    params:
         bams= lambda wildcards: wildcards.project+"_output/dedup" if config["use_umi"] else wildcards.project+"_output/bam",
         out= lambda wildcards: wildcards.project+"_output/SABER",
-        vrc= config["variant_read_cutoff"],
-        tvaf= config["tvaf"]
+        conf= "config.yaml"
     shell:"""
     Rscript scripts/installrpy.R || :
-    Rscript scripts/analysis.R {params.bams} {params.out} {params.vrc} {params.tvaf}
+    Rscript scripts/analysis.R {params.conf} {params.bams} {params.out}
     """
-
-

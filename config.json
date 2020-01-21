@@ -1,6 +1,0 @@
-{
-    "output_prefix":"SABER",
-    "use_umi":false,
-    "variant_read_cutoff":20000,
-    "tvaf":0.3
-}

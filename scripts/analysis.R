@@ -1,5 +1,6 @@
+args=commandArgs(trailingOnly=TRUE)
 ####libraries####
-library(CrispRVariants) 
+library(CrispRVariants)
 library("Rsamtools")
 library(rtracklayer)
 library(GenomicFeatures)
@@ -7,9 +8,11 @@ library(gridExtra)
 library(GenomicRanges)
 library(RColorBrewer)
 library(rPython)
+library(sqldf)
 library(rmarkdown)
 library(foreach)
 library(doParallel)
+library(stringr)
 library(tidyverse)
 library(cowplot)
 library(reshape2)
@@ -20,6 +23,8 @@ library(viridis)
 library(ggExtra)
 library(ggrepel)
 library(boot)
+library(yaml)
+config <- yaml.load_file(args[1])
 
 
 ####version notes####
@@ -36,25 +41,33 @@ library(boot)
 # analysis v6 comes from v5 but changes data_out.csv to include sample names and top clones
 
 ####input data##################################################################################
-#Be sure this is correct before running!!!                                                
+#Be sure this is correct before running!!!
 #enter the experiment data
 
-genome<-"gestalt_pipeline4.fasta" # include .fasta.  Genome file has to be in genome folder.
+genome<-"SABER_pipeline4.fasta" # include .fasta.  Genome file has to be in genome folder.
 genome_fp<-paste0(getwd(),"/references/",genome)
 output_file<-"crispRvariants"#for the cripsrvariants plot and prefix on sample output csv and vaf plot
 group_name<-"crispRvariants"
 threshold<-200# number of reads below which they don't appear on the big crispr plot
-use_UMI<-FALSE#works how you think it should work
 dt_stamp<-str_replace_all(string = Sys.time(), pattern = "([-\\s:ESTD])",replacement = "")
 
-new_analysis<-T#if F, then load the R data file you want to work with and then source the script.  If T, be sure the output folder is set correctly  
-tvaf_preset<-F
-output_folder<-"resub_vfinal_AG";dir.create(output_folder)#this will make a new output folder each time you run it
+#new_analysis<-T#if F, then load the R data file you want to work with and then source the script.  If T, be sure the output folder is set correctly
 
+#output_folder<-"resub_vfinal_AG";dir.create(output_folder)#this will make a new output folder each time you run it
 
-if (tvaf_preset==T) {
-  final_tvaf<-0.01#enter a number less than or equal to 1 to set the tvaf
+if ("tvaf" %in% names(config)) {
+  tvaf_preset<-T
+  final_tvaf<-config$tvaf
+}else{
+  tvaf_preset<-F
 }
+# make working subdirectories and create variables
+output_folder<-args[3]
+bam_folder<-args[2]
+bam_files<-list.files(path = bam_folder,".*.bam$")
+bam_fnames<-paste0(bam_folder,"/",bam_files)
+mid_names<-tools::file_path_sans_ext(bam_files)
+
 
 #graphical parameters
 gp_crisprplot<-c("width" = 14, "height" = 3, "top.n" = 20)
@@ -123,236 +136,38 @@ general_diversity_func<-function(x,q){
 }
 
 
+#setup parallel backend to use many processors
+cores=detectCores()
+cl <- makeCluster(cores[1]-1) #not to overload your computer
+registerDoParallel(cl)
+
+
+group_desig<-rep(group_name, times=length(bam_fnames))
+md<-read.csv("references/blank_metadata.csv", header = TRUE)
+newrow<-data.frame(bamfile=bam_fnames, directory=getwd(),Short.name=mid_names,Targeting.type="",sgRNA1="",sgRNA2="",Group=group_desig)
+md<-rbind(md,newrow)
+
+
+#create target region
+gd <- rtracklayer::import("references/SABER2.bed")
+gdl <- GenomicRanges::resize(gd, width(gd) + 0, fix = "center") #resize region for analysis
+reference0<-read_file("references/SABER2_ref.txt")
+reference1<-substr(reference0,1,310)
+reference<-Biostrings::DNAString(reference1)
+reference
+
+# make the crispr set
+crispr_set <- readsToTarget(bam_fnames,
+                            target = gd,
+                            reference = reference,
+                            names = md$Short.name,
+                            target.loc = 16,
+                            collapse.pairs = FALSE,
+                            split.snv=FALSE)#split.snv=FALSE adds SNVs into no variant count
 
 
 
 
-
-####core pipeline####
-# set path
-#Sys.setenv(PATH = "/home/OSUMC.EDU/blas02/miniconda3/bin:/opt/bcl2fastq:/opt/cellranger-3.0.2:/home/OSUMC.EDU/blas02/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin")
-Sys.setenv(PATH = "/home/OSUMC.EDU/blas02/anaconda3/bin:/home/OSUMC.EDU/blas02/anaconda3/condabin:/opt/cellranger-3.1.0:/home/OSUMC.EDU/blas02/miniconda3/bin:/opt/bcl2fastq:/opt/cellranger-3.1.0:/home/OSUMC.EDU/blas02/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin")
-
-# make working subdirectories and create variables
-system("mkdir temp"); temp_folder<-paste0(getwd(),"/temp")
-system("mkdir temp/fastq_split_R1"); fastq_split_R1_folder<-paste0(getwd(),"/temp/fastq_split_R1")
-system("mkdir temp/fastq_split_R2"); fastq_split_R2_folder<-paste0(getwd(),"/temp/fastq_split_R2")
-system("mkdir temp/bam_temp"); bam_temp<-paste0(getwd(),"/temp/bam_temp")
-system("mkdir temp/fastq_trimmed"); fastq_trimmed<-paste0(getwd(),"/temp/fastq_trimmed")
-system("mkdir temp/fastq_merged"); fastq_merged<-paste0(getwd(),"/temp/fastq_merged")
-system("mkdir temp/sam_temp"); sam_temp<-paste0(getwd(),"/temp/sam_temp")
-system("mkdir temp/cutadapt1"); cutadapt1_folder<-paste0(getwd(),"/temp/cutadapt1")
-system("mkdir temp/cutadapt2"); cutadapt2_folder<-paste0(getwd(),"/temp/cutadapt2")
-system("mkdir temp/fastq_umi_out"); fastq_umi_out<-paste0(getwd(),"/temp/fastq_umi_out")
-system("mkdir temp/bam_dedup"); bam_dedup<-paste0(getwd(),"/temp/bam_dedup")
-
-if (new_analysis==T) {
-  system(paste0("mkdir ",output_folder,"/bam_dedup_output")); bam_dedup_output_folder<-paste0(output_folder,"/bam_dedup_output")
-  system(paste0("mkdir ",output_folder,"/fastqc_files")); fastqc_files_folder<-paste0(output_folder,"/fastqc_files")
-  system(paste0("mkdir ",output_folder,"/bam_output")); bam_output_folder<-paste0(output_folder,"/bam_output")
-  system(paste0("mkdir ",output_folder,"/PEAR_output")); PEAR_output_folder<-paste0(output_folder,"/PEAR_output")
-  
-  #setup parallel backend to use many processors
-  cores=detectCores()
-  cl <- makeCluster(cores[1]-1) #not to overload your computer
-  registerDoParallel(cl)
-  
-  #copy fastqs to temp/fastq
-  system("cp -r fastq temp")
-  
-  #load samples from fastq folder
-  samples<-list.files(paste0(getwd(),"/temp/fastq")) # loads all files in the fastq folder
-  samples_fp<-paste0(getwd(),"/temp/fastq/",samples)
-  
-  #unzip
-  foreach(i=1:length(samples_fp)) %dopar% {
-    cmd<-paste0("gzip -d ",samples_fp[i])
-    message(cmd, "\n"); system(cmd)
-  }
-  
-  samples<-list.files(paste0(getwd(),"/temp/fastq")) # loads all files in the fastq folder
-  samples_fp<-paste0(getwd(),"/temp/fastq/",samples)
-  
-  #put into fastq_split_R1 and R2 folders
-  foreach(i=1:length(samples_fp)) %dopar% {
-    if (grepl("_R1_",samples_fp[i])==TRUE){
-      cmd<-paste0("cp ",samples_fp[i]," ",fastq_split_R1_folder)
-      message(cmd, "\n"); system(cmd)
-    } else{
-      cmd<-paste0("cp ",samples_fp[i]," ",fastq_split_R2_folder)
-      message(cmd, "\n"); system(cmd)
-    }
-  }
-  
-  fastq_split_R1_files<-list.files(fastq_split_R1_folder); fastq_split_R1_fp<-paste0(fastq_split_R1_folder,"/",fastq_split_R1_files)
-  fastq_split_R2_files<-list.files(fastq_split_R2_folder); fastq_split_R2_fp<-paste0(fastq_split_R2_folder,"/",fastq_split_R2_files)
-  
-  
-  # merge read pairs with PEAR
-  mid_names<-substr(fastq_split_R1_files, 6,13)
-  for(i in 1:length(fastq_split_R1_fp)){
-    cmd<-paste0("pear -f ",fastq_split_R1_fp[i]," -r ",fastq_split_R2_fp[i]," -o ",fastq_merged,"/",mid_names[i], " -j 39 > ",PEAR_output_folder,"/",mid_names[i],".PEARreport.txt")
-    message(cmd, "\n"); system(cmd)
-  }
-  unlink(paste0(fastq_merged,"/*unassembled*"),recursive = TRUE)
-  unlink(paste0(fastq_merged,"/*discarded*"),recursive = TRUE)
-  fastq_merged_files<-list.files(fastq_merged); fastq_merged_fp<-paste0(fastq_merged,"/",fastq_merged_files)
-  
-  
-  #run trimmomatic on split and ordered files
-  mid_names<-substr(fastq_merged_files, 1,5)
-  foreach(i=1:length(fastq_merged_fp)) %dopar% {
-    cmd<-paste0("java -jar /opt/Trimmomatic-0.38/trimmomatic-0.38.jar SE ", #invoke trimmomatic
-                fastq_merged_fp[i]," ",# merged read input
-                fastq_trimmed,"/",mid_names[i],".trimmed.fastq ",# merged trimmed output
-                "SLIDINGWINDOW:4:15 MINLEN:100")# trim parameters.
-    message(cmd, "\n"); system(cmd)
-  }
-  fastq_trimmed_files<-list.files(fastq_trimmed); fastq_trimmed_fp<-paste0(fastq_trimmed,"/",fastq_trimmed_files)
-  
-  #run cutadapt to keep only fastqs that have the full flanking primer sequences
-  #5 prime adapter = V6/7F:  TCGAGCTCAAGCTTCGG
-  mid_names<-substr(fastq_trimmed_files, 1,5)
-  foreach(i=1:length(fastq_trimmed_fp)) %dopar% {
-    cmd<-paste0("cutadapt -g XTCGAGCTCAAGCTTCGG --discard-untrimmed -e 0.01 --action=none -o ",cutadapt1_folder,"/",mid_names[i],".cutadapt1.fastq ",fastq_trimmed_fp[i])#changed to allow full adapter sequence anywhere to accomodate UMI.  If this doesn't work change X to ^.
-    message(cmd, "\n"); system(cmd)
-  }
-  cutadapt1_files<-list.files(cutadapt1_folder); cutadapt1_fp<-paste0(cutadapt1_folder,"/",cutadapt1_files)
-  
-  #3 prime adapter = V6/7R:  GACCTCGAGACAAATGGCAG (reverse complement of the primer sequence 5'-3')
-  mid_names<-substr(cutadapt1_files, 1,5)
-  foreach(i=1:length(cutadapt1_fp)) %dopar% {
-    cmd<-paste0("cutadapt -a GACCTCGAGACAAATGGCAG$ --discard-untrimmed -e 0.01 --action=none -o ",cutadapt2_folder,"/",mid_names[i],".cutadapt2.fastq ",cutadapt1_fp[i])
-    message(cmd, "\n"); system(cmd)
-  }
-  cutadapt2_files<-list.files(cutadapt2_folder); cutadapt2_fp<-paste0(cutadapt2_folder,"/",cutadapt2_files)
-  
-  
-  # run fastqc on trimmed and demultiplexed input files
-  foreach(i=1:length(cutadapt2_fp)) %dopar% {
-    cmd<-paste0("fastqc -o ",fastqc_files_folder," ",cutadapt2_fp[i])
-    message(cmd, "\n"); system(cmd)
-  }
-  
-  # run multiqc to summarize the qc files
-  system(paste0('multiqc -d ',output_folder," -o ",output_folder))
-  
-  
-  # extract UMI tags (optional)
-  mid_names<-substr(cutadapt2_files, 1,5)
-  if (use_UMI==TRUE){
-    foreach(i=1:length(cutadatpt2_fp)) %dopar% {
-      cmd<-paste0("umi_tools extract --stdin=",fastq_trimmed_fp[i]," --bc-pattern=NNNNNNNNNN --log=",
-                  output_folder,"/UMI.log --stdout=",fastq_umi_out,"/",mid_names[i],".processed.fastq")
-      message(cmd, "\n"); system(cmd)
-    }
-    fastq_umi_out_files<-list.files(fastq_umi_out); fastq_umi_out_fp<-paste0(fastq_umi_out,"/",fastq_umi_out_files)
-  }
-  
-  # align with needleall
-  if (use_UMI==TRUE){
-    foreach(i=1:length(cutadapt2_files)) %dopar% {
-      cmd<-paste0("needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence ",genome_fp," -bsequence ",fastq_umi_out_fp[i]," -outfile ",sam_temp,"/",mid_names[i],".sam -errfile ",output_folder,"/needleall.error")
-      message(cmd, "\n"); system(cmd)
-    }
-  } else {
-    foreach(i=1:length(cutadapt2_files)) %dopar% {
-      cmd<-paste0("needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence ",genome_fp," -bsequence ",cutadapt2_fp[i]," -outfile ",sam_temp,"/",mid_names[i],".sam -errfile ",output_folder,"/needleall.error")
-      message(cmd, "\n"); system(cmd)
-    }
-  }
-  
-  sam_temp_files<-list.files(sam_temp); sam_temp_fp<-paste0(sam_temp,"/",sam_temp_files)
-  
-  # fix sam file header and select only reads matching at position 1
-  for (i in 1:length(sam_temp_files)) {
-    samdf<-read.delim(sam_temp_fp[i], sep="\t", header = FALSE)#read in sam file
-    samdf<-samdf[-(1:2),]#chop off the old header
-    samdf<-samdf[which(samdf$V4=="1"),]#select only reads mapping to coordinate 1
-    sam_header<-read.table("references/sam_header.csv", fill=TRUE, header=FALSE, sep=",", colClasses=(rep("character",13)))# read in standard sam header
-    names(sam_header)<-paste("V", 1:13, sep="")
-    samdf<-rbind(sam_header,samdf)
-    write_tsv(samdf, na = "", path = sam_temp_fp[i],col_names = FALSE, append=FALSE)
-  }
-  sam_temp_files<-list.files(sam_temp); sam_temp_fp<-paste0(sam_temp,"/",sam_temp_files)
-  
-  # convert sam to bam
-  foreach(i=1:length(sam_temp_files)) %dopar% {
-    cmd<-paste0("samtools view -S -b ",sam_temp_fp[i]," > ",bam_temp,"/",mid_names[i],".bam")
-    message(cmd,"\n"); system(cmd)
-  }
-  
-  bam_temp_files<-list.files(path = bam_temp); bam_temp_fp<-paste0(bam_temp,"/",bam_temp_files)
-  
-  # sort and index bam
-  foreach(i=1:length(bam_temp_fp)) %dopar% {
-    cmd<-paste0("samtools sort ",bam_temp_fp[i]," -o ",bam_temp_fp[i])
-    message(cmd, "\n"); system(cmd)
-  }
-  
-  foreach(i=1:length(bam_temp_fp)) %dopar% {
-    cmd<-paste0("samtools index ",bam_temp_fp[i])
-    message(cmd, "\n"); system(cmd)
-  }
-  
-  system(paste0("cp -r temp/bam_temp ",bam_output_folder))#move final bam files and indices to output
-  
-  #deduplicate, sort and index UMI tagged reads (optional)
-  if (use_UMI==TRUE){
-    foreach(i=1:length(fastq_umi_out_files)) %dopar% {
-      cmd<-paste0("umi_tools dedup --method=unique -I ",bam_temp_fp[i]," --output-stats=",bam_dedup_output_folder,"/",mid_names[i]," -S ",bam_dedup,"/",mid_names[i],".dedup.bam")
-      message(cmd, "\n"); system(cmd)
-    }
-    bam_dedup_files<-list.files(path = bam_dedup); bam_dedup_fp<-paste0(bam_dedup,"/",bam_dedup_files)
-    
-    foreach(i=1:length(bam_dedup_fp)) %dopar% {
-      cmd<-paste0("samtools sort ",bam_dedup_fp[i]," -o ",bam_dedup_fp[i])
-      message(cmd, "\n"); system(cmd)
-    }
-    
-    foreach(i=1:length(bam_dedup_fp)) %dopar% {
-      cmd<-paste0("samtools index ",bam_dedup_fp[i])
-      message(cmd, "\n"); system(cmd)
-    }
-    system(paste0("cp -r temp/bam_dedup ", bam_dedup_output_folder))
-  }
-  
-  #build metadata for experiment
-  if (use_UMI==TRUE){
-    bam_fnames<-bam_dedup_fp
-  } else {
-    bam_fnames <- bam_temp_fp
-  }
-  group_desig<-rep(group_name, times=length(bam_fnames))
-  md<-read.csv("references/blank_metadata.csv", header = TRUE)
-  newrow<-data.frame(bamfile=bam_fnames, directory=getwd(),Short.name=mid_names,Targeting.type="",sgRNA1="",sgRNA2="",Group=group_desig)
-  md<-rbind(md,newrow)
-  
-  
-  #create target region
-  gd <- rtracklayer::import("references/gestalt2.bed")
-  gdl <- GenomicRanges::resize(gd, width(gd) + 0, fix = "center") #resize region for analysis
-  reference0<-read_file("references/gestalt2_ref.txt")
-  reference1<-substr(reference0,1,310)
-  reference<-Biostrings::DNAString(reference1)
-  reference
-  
-  # make the crispr set
-  crispr_set <- readsToTarget(bam_fnames,
-                              target = gd,
-                              reference = reference,
-                              names = md$Short.name,
-                              target.loc = 16,
-                              collapse.pairs = FALSE,
-                              split.snv=FALSE)#split.snv=FALSE adds SNVs into no variant count
-}
-
-if (new_analysis==F) {
-  #setup parallel backend to use many processors
-  cores=detectCores()
-  cl <- makeCluster(cores[1]-1) #not to overload your computer
-  registerDoParallel(cl)
-}
 
 #####generate informative, no variant and common variant tables with vaf and paf thresholds####
 generate_v1<-function(x,thresh,vaf_thresh,paf_thresh,vc_prop,output_folder,output_file){
@@ -519,45 +334,45 @@ cor_func3<-function(include_uninformative, thresh, tvaf, method, output_folder){
   rownames(df_cor_wide)<-df_cor_wide[,1]
   df_cor_wide<-df_cor_wide[,-1]
   if (include_uninformative==TRUE) {df_cor_wide1<-df_cor_wide} else {df_cor_wide1<-df_cor_wide[-c(1,2),]}
-  
-  
+
+
   stat_matrix<-matrix(vector(),nrow = ncol(df_cor_wide1), ncol = ncol(df_cor_wide1))
   colnames(stat_matrix)<-colnames(df_cor_wide1)
   rownames(stat_matrix)<-colnames(df_cor_wide1)
-  
+
   for (i in 1:ncol(df_cor_wide1)) {
     for (j in 1:ncol(df_cor_wide1)) {
       a<-pmin(df_cor_wide1[,i],df_cor_wide1[,j])
       b<-pmax(df_cor_wide1[,i],df_cor_wide1[,j])
       c<-(sum(a)*2)/(sum(a)+sum(b))
       stat_matrix[i,j]<-c
-      
+
     }
-    
+
   }
-  
+
   reorder_cormat <- function(x){
     # Use correlation between variables as distance
     dd <- as.dist((1-x)/2)
     hc <- hclust(dd)
     x <-x[hc$order, hc$order]
   }
-  
+
   get_lower_tri <- function(x){
     x[upper.tri(x)]<- NA
     return(x)
   }
-  
+
   sm_reordered<-reorder_cormat(stat_matrix)
   sm_lower<-get_lower_tri(sm_reordered)
-  
+
   msm<-melt(sm_lower)
-  
+
   msm_plot<-ggplot(data = msm, aes(x = msm$Var1, y = msm$Var2, fill = msm$value))
   msm_plot<-msm_plot+
     geom_tile()+
     scale_fill_distiller(palette = "RdYlBu", na.value = "transparent",guide = guide_colorbar(draw.ulim = TRUE, draw.llim = TRUE),limits = c(0,1))+
-    theme_cowplot(font_size = 11)+ 
+    theme_cowplot(font_size = 11)+
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 8))+
     theme(axis.text.y = element_blank())+
     theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))+
@@ -571,21 +386,23 @@ cor_func3<-function(include_uninformative, thresh, tvaf, method, output_folder){
     theme(legend.position = c(0,0.7))+
     coord_fixed()
   msm_plot
-  
+
   msm1<-msm[complete.cases(msm),]
   msm1$rank<-rank(msm1$value,ties.method = "random")
   msm1$tvaf<-tvaf
   msm1$include_uninformative<-include_uninformative
-  
+
   #calculate Fraction informative
   FI<-as.data.frame(colSums(df_cor_wide[-c(1,2),])/colSums(df_cor_wide))#ratio of reads excluding no variant and common variant to all reads in each sample.
   colnames(FI)<-"Fraction_Informative"
   FI$sample_x<-rownames(FI)
-  
+
   avg_share<-round(mean(msm[which(msm$Var1!=msm$Var2),3],na.rm = TRUE),5)#averages sharing factor excluding identical comparisons
-  
+
+# avg_share<-round(mean(msm[which(msm$Var1!=msm$Var2),3],na.rm = TRUE),4)#averages pearson correlation excluding identical comparisons
+
   mean_inf<-round(mean(FI$Fraction_Informative),3)
-  
+
   save_plot(plot = msm_plot, filename = paste0(input_directory,"/msm_plot_tvaf_",tvaf,"_uninform_",include_uninformative,".pdf"), base_width = 2.75)
   nubbin<-data.frame(threshold = thresh, tvaf = tvaf, mean_inf = mean_inf, avg_share = avg_share)
   write.csv(x = nubbin, file = paste0(input_directory,"/nubbin_",include_uninformative,"_",method,".csv"))
@@ -701,7 +518,7 @@ if (tvaf_preset==T) {
   file.rename(from = output_folder_old,to = output_folder)
 }
 
-####bootstrap analysis on whole dataset #### 
+####bootstrap analysis on whole dataset ####
 #helper function for bootstrap analysis
 bootf<-function(data, indices){
   dt<-data[indices,]
@@ -753,7 +570,7 @@ boot_cor_plot
 save_plot(plot = boot_cor_plot, filename = paste0(output_folder,"/bootstrap_correlation_sf.pdf"), base_height = unname(gp_boot_corplot["height"]), base_width = unname(gp_boot_corplot["width"]))
 
 
-boot_ci<-boot.ci(bootstrap, index = 1)#makes a list of the bootstrap confidence intervals 
+boot_ci<-boot.ci(bootstrap, index = 1)#makes a list of the bootstrap confidence intervals
 boot_df1<-boot_df
 boot_df1$v1bca<-rep(boot_ci$bca[1,4], times = nrow(boot_df1))#appends the lower bound of the 95%ci for the V1 value (mean inf) to the df
 boot_df1$lower<-boot_df1$V1<boot_df1$v1bca
@@ -772,9 +589,9 @@ boot_plot<-boot_plot+
 boot_plot
 save_plot(plot = boot_plot, filename = paste0(output_folder,"/bootstrap_estimate_mif_sf.pdf"), base_height = unname(gp_boot_estimate["height"]), base_width = unname(gp_boot_estimate["width"]))
 
-returnlist<-list("bootstrap report:  " = bootstrap, 
-                 "correlation of FI and SD over replicates:  " = cor_return, 
-                 "95% ci of bootstrap values:  " = boot_ci, 
+returnlist<-list("bootstrap report:  " = bootstrap,
+                 "correlation of FI and SD over replicates:  " = cor_return,
+                 "95% ci of bootstrap values:  " = boot_ci,
                  "estimate:  " = mean(boot_df$V1))
 capture.output(print(returnlist), file = paste0(output_folder,"/bootstrap_report.txt"))
 
@@ -820,6 +637,8 @@ fi_dist<-fi_dist+
   labs(x="Sample", y=expression(paste(Phi)))
 fi_dist
 save_plot(plot = fi_dist, filename = paste0(output_folder,"/fidist_sf.pdf"), base_width = unname(gp_fidist["width"]), base_height = unname(gp_fidist["height"]))
+
+# save_plot(plot = fi_dist, filename = paste0(output_folder,"/fidist_sharing.pdf"), base_width = 3.5, base_height = 2.75)
 
 informative_df<-top_boot_clust
 informative_spec_vec<-informative_df$specimen
@@ -928,7 +747,7 @@ shapiro.test(vaf2_df$value)
 
 p2<-ggplot(vaf2_df, aes(x = vaf2_df$value))
 p2<-p2+
-  geom_histogram(aes(y = ..density..), color = "black", fill = "#DC0000", binwidth = 1) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "#DC0000", binwidth = 1) +
   geom_density(alpha=.2, fill="#DC0000")+
   theme_cowplot(font_size = unname(gp_histograms["fontsize"]))+
   theme(legend.position = "none")+
@@ -939,7 +758,7 @@ save_plot(plot = p2, filename = paste0(output_folder,"/vaf_0.02.pdf"), base_widt
 
 p3<-ggplot(shannon_df, aes(x = shannon_df$value))
 p3<-p3+
-  geom_histogram(aes(y = ..density..), color = "black", fill = "#DC0000", binwidth = 0.5) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "#DC0000", binwidth = 0.5) +
   geom_density(alpha=.2, fill="#DC0000")+
   theme_cowplot(font_size = unname(gp_histograms["fontsize"]))+
   theme(legend.position = "none")+
@@ -950,7 +769,7 @@ save_plot(plot = p3, filename = paste0(output_folder,"/shannon.pdf"), base_width
 
 p4<-ggplot(simpson_df, aes(x = simpson_df$value))
 p4<-p4+
-  geom_histogram(aes(y = ..density..), color = "black", fill = "#DC0000", binwidth = 1) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "#DC0000", binwidth = 1) +
   geom_density(alpha=.2, fill="#DC0000")+
   theme_cowplot(font_size = unname(gp_histograms["fontsize"]))+
   theme(legend.position = "none")+
@@ -1002,7 +821,9 @@ fidf_5_highfi<-filter(fidf_5, fidf_5$boot_clust=="High FI")
 fidf_5_lowfi<-filter(fidf_5, fidf_5$boot_clust=="Low FI")
 
 sink(paste0(output_folder,"/fi_report.txt"))
+# fidf_5_highfi<-filter(fidf_5, fidf_5$boot_clust=="High FI")
 fidf_5_highfi
+# fidf_5_lowfi<-filter(fidf_5, fidf_5$boot_clust=="Low FI")
 fidf_5_lowfi
 mean(fidf_5_highfi$FI)
 se(fidf_5_highfi$FI)
@@ -1202,7 +1023,8 @@ grp<-factor(grp, levels = c("High FI", "Low FI"))
 ps<-37
 pam_seq<-seq(ps,280,27)
 
-while (!is.null(dev.list())) dev.off()
+#while (!is.null(dev.list())) dev.off()
+pdf(file=paste0(output_folder,"/",output_file,".pdf"), width = unname(gp_crisprplot["width"]), height = unname(gp_crisprplot["height"]))
 plotVariants(crispr_set,
              col.wdth.ratio = c(1,1),
              plotAlignments.args = list(pam.start = pam_seq, #c(37,64), #draws a 3-nt box starting including the position noted
@@ -1212,7 +1034,7 @@ plotVariants(crispr_set,
                                         tile.height = 0.9,
                                         xtick.labs = c("0","100","200","300"),
                                         xtick.breaks = c(0,100,200,300),
-                                        plot.text.size = 0, 
+                                        plot.text.size = 0,
                                         top.n = unname(gp_crisprplot["top.n"])),
              plotFreqHeatmap.args = list(min.count = threshold,
                                          plot.text.size = 2,
@@ -1224,12 +1046,12 @@ plotVariants(crispr_set,
                                          type = "proportions",
                                          #legend.position = "none",
                                          legend.key.height = grid::unit(0.5, "lines")))
-dev.copy2pdf(file=paste0(output_folder,"/",output_file,".pdf"), width = unname(gp_crisprplot["width"]), height = unname(gp_crisprplot["height"]))  #for 10 samples use 24 x 24, for 30-40 samples use 48 x 48
-
+#dev.copy2pdf(file=paste0(output_folder,"/",output_file,".pdf"), width = unname(gp_crisprplot["width"]), height = unname(gp_crisprplot["height"]))  #for 10 samples use 24 x 24, for 30-40 samples use 48 x 48
+dev.off()
 
 # clean up directories
-unlink("temp", recursive = TRUE)
-unlink("fastq", recursive = TRUE)
-dir.create("fastq")
-system(paste0("cp analysis_resub_vfinal.R ",output_folder,"/analysis_resub_vfinal.R"))
-save.image(paste0(output_folder,"/",output_folder,".RData"))
+# unlink("temp", recursive = TRUE)
+# unlink("fastq", recursive = TRUE)
+# dir.create("fastq")
+# system(paste0("cp analysis_resub_vfinal.R ",output_folder,"/analysis_resub_vfinal.R"))
+save.image(paste0(output_folder,"/rdata.RData"))
