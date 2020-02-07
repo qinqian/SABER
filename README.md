@@ -18,6 +18,14 @@ cd SABER
 ```
 Run the demo.
 ```
+# make sure you're in the SABER dir and can use snakemake
+# download demo data and extract
+wget https://github.com/blachlylab/SABER/releases/download/v1.0.0/demo_data.tar
+mkdir demo
+cd demo
+tar -xf ../demo_data.tar
+cd ..
+# run pipeline
 snakemake -j 8 --use-conda demo
 ```
 First snakemake will spend 5-10 minutes downloading the conda environment required to run SABER (this is only done once). It will take another 5-15 minutes to run the demo set through the SABER pipeline and analysis. The SABER analysis scripts will also install some other R packages into the conda environment (this takes about 5 minutes and only needs to be done once).The conda environments are installed under .snakemake/conda/ and you could activate then by using:
