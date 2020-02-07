@@ -47,14 +47,14 @@ snakemake -j 8 --use-conda
 ```
 
 ### Configurable settings
-SABER's JSON config file has some configuarable options.
+SABER's YAML config file has some configuarable options.
 ```
-{
-    "output_prefix":"SABER",
-    "use_umi":false,
-    "variant_read_cutoff":5000,
-    "tvaf":0.3
-}
+output_prefix: SABER
+use_umi: false
+#variant_read_cutoff: 20000
+#
+# Uncomment below to set tvaf
+# tvaf: 0.01
 ```
 Output Prefix: prefixes the output directory
 
@@ -62,7 +62,7 @@ Use UMI: set if you used a UMI equipped PCR library
 
 Variant Read Cutoff: When plotting the large heatmap of all samples all variants with more than 5000 supporting reads will be shown.
 
-tVaf or Theta Vaf: variants accounting for more than 0.3% of reads in more than one sample are identified as common variants and excluded.
+tVaf or Theta Vaf: variants accounting for more than 0.3% of reads in more than one sample are identified as common variants and excluded. If not provided, it will be calculated.
 
 
 ## Introduction
