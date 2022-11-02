@@ -2,19 +2,15 @@ import glob
 import os.path
 import re
 configfile: "config.yaml"
-#load samples from fastq folder
-#samples<-list.files(paste0(getwd(),"/fastq")) # loads all files in the fastq folder
-#samples_fp<-paste0(getwd(),"/fastq/",samples)
-# fq_files=glob.glob(os.path.join(config['fastq_dir'], "*.fastq.gz"))
-# r = re.compile("(.*)(_S[0-9].*)?(_L00[1-9])?_R[12](_001)?.fastq.gz")
-# fq_files= list(filter(r.match,fq_files))
-# print(fq_files)
-# SAMPLES=list(set([r.match(x).group(1)[len(config['fastq_dir'])+1::] for x in fq_files]))
-# #SAMPLES, = glob_wildcards(os.path.join(config['fastq_dir'], "{sid}(_S[0-9].*)?(_L00[1-9])?_R[12](_001)?.fastq.gz"))
-# print(SAMPLES)
+
+adapters = ['XNNNNNNNNNNACTCAGATCTCGAGCTCAAGCTTCG', 
+            'GAGACAAATGGCAGCCCG']
+
+barcode = 'NNNNNNNNNN'
+
 
 def INPUTFOLDER(wildcards):
-    output="fastq"
+    output = config['input_prefix']
     if wildcards.project == "testing":
         output="testing_"+output
     elif wildcards.project == "validation":
@@ -25,17 +21,18 @@ def INPUTFOLDER(wildcards):
 
 def INPUTSAMPLES(wildcards):
     output = INPUTFOLDER(wildcards)
+    print(output)
     fq_files=glob.glob(os.path.join(output, "*.fastq.gz"))
+    print(fq_files)
     r = re.compile("(.*)(_S[0-9].*)?(_L00[1-9])?_R[12](_001)?.fastq.gz")
     fq_files= list(filter(r.match,fq_files))
     SAMPLES=list(set([r.match(x).group(1)[len(output)+1::] for x in fq_files]))
-    print(SAMPLES)
     return SAMPLES
 
 def remapSampleToFastq(wildcards):
     # Miseq files end in _001.fastq.gz ; NWCH Hiseq files do not
-    # r1list = glob.glob(os.path.join(config['fastq_dir'], wildcards.sample + "_*_R1.fastq.gz")) # usu ends in _001.fastq.gz; not NWCH
-    # r2list = glob.glob(os.path.join(config['fastq_dir'], wildcards.sample + "_*_R2.fastq.gz"))
+    #r1list = glob.glob(os.path.join(config['input_prefix'], wildcards.sample + "_*_R1.fastq.gz")) # usu ends in _001.fastq.gz; not NWCH
+    #r2list = glob.glob(os.path.join(config['input_prefix'], wildcards.sample + "_*_R2.fastq.gz"))
     r1_glob_pattern = os.path.join(INPUTFOLDER(wildcards), wildcards.sample + "_*R1")
     r2_glob_pattern = os.path.join(INPUTFOLDER(wildcards), wildcards.sample + "_*R2")
     r1_glob_pattern += "*.fastq.gz"
@@ -52,7 +49,8 @@ def umi_trim_switch(wildcards):
     if(config["use_umi"]):
         return wildcards.project+"_output/fastq_umi/"+wildcards.sample+".fastq"
     else:
-        return wildcards.project+"_output/cutadapt3p/"+wildcards.sample+".fastq"
+        return wildcards.project+"_output/cutadapt3p/"+wildcards.sample+".fastq" # trim too much
+        #return wildcards.project+"_output/fastq_trimmed/"+wildcards.sample+".trimmed.fastq"
 
 def umi_bam_switch(wildcards):
     if(config["use_umi"]):
@@ -62,7 +60,6 @@ def umi_bam_switch(wildcards):
 
 def multiqc_input(wildcards):
     return expand("{project}_output/fastqc/{sample}_fastqc.html",sample=INPUTSAMPLES(wildcards),project=wildcards.project)
-
 
 rule normal_run:
     input: config["output_prefix"]+"_output/SABER/analysis.done",config["output_prefix"]+"_output/multiqc/multiqc_report.html"
@@ -77,8 +74,8 @@ rule demo:
     input: "demo_output/SABER/analysis.done","demo_output/multiqc/multiqc_report.html"
 
 rule decompress:
-    input:"fastq/{sample}.fastq.gz"
-    output:"fastq/{sample}.fastq"
+    input:"%s/{sample}.fastq.gz" % config['input_prefix']
+    output:"%s/{sample}.fastq" % config['input_prefix']
     # TODO: should I assume gzip is installed?
     shell:"gzip -d -c {input} > {output}"
 
@@ -102,7 +99,9 @@ rule cutadapt5p:
     input:"{project}_output/fastq_trimmed/{sample}.trimmed.fastq"
     output:"{project}_output/cutadapt5p/{sample}.fastq"
     params:
-        adapter= "XCGCAGAGAGGCTCCGTG" if config["use_umi"] else "XTCGAGCTCAAGCTTCGG"
+        #adapter= "XCGCAGAGAGGCTCCGTG" if config["use_umi"] else "XTCGAGCTCAAGCTTCGG"
+        adapter= adapters[0]
+        #adapter= "XCTAAATGGCTGTGAGAGAGCTCAG" if config["use_umi"] else "XACTCAGATCTCGAGCTCAAG"
     conda:"envs/tools-env.yaml"
     #changed to allow full adapter sequence anywhere to accomodate UMI.  If this doesn't work change X to ^.
     shell:"cutadapt -g {params.adapter} --discard-untrimmed -e 0.01 --action=none -o {output} {input}"
@@ -113,7 +112,8 @@ rule cutadapt3p:
     output:"{project}_output/cutadapt3p/{sample}.fastq"
     conda:"envs/tools-env.yaml"
     #changed to allow full adapter sequence anywhere to accomodate UMI.  If this doesn't work change X to ^.
-    shell:"cutadapt -a GACCTCGAGACAAATGGCAG$ --discard-untrimmed -e 0.01 --action=none -o {output} {input}"
+    shell: "cutadapt -a %s$ --discard-untrimmed -e 0.01 --action=none -o {output} {input}" % adapters[1] ## working one 
+
 
 # run fastqc on trimmed and demultiplexed input files
 rule fastqc:
@@ -135,20 +135,21 @@ rule umi_extract:
     output:"{project}_output/fastq_umi/{sample}.fastq"
     log:"{project}_logs/umi_extract/{sample}.log"
     conda:"envs/tools-env.yaml"
-    shell:"umi_tools extract --stdin={input} --bc-pattern=XXXXXXXXXXXXXXXXXNNNNNNNNNN --log={log} --stdout={output}"
+    #shell:"umi_tools extract --stdin={input} --bc-pattern=XXXXXXXXXXXXXXXXXNNNNNNNNNN --log={log} --stdout={output}"
+    shell:"umi_tools extract --stdin={input} --bc-pattern=%s --log={log} --stdout={output}" % barcode
 
 rule needleall:
     input:umi_trim_switch
     output:"{project}_output/needleall/{sample}.sam"
     log:"{project}_logs/needleall/{sample}.error"
     conda:"envs/tools-env.yaml"
-    shell:"needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence references/SABER_pipeline4.fasta -bsequence {input} -outfile {output} -errfile {log}"
+    shell:"needleall -aformat3 sam -gapextend 0.25 -gapopen 10.0 -awidth3=5000 -asequence references/hspGESTALT_amplicon_corrected.fa -bsequence {input} -outfile {output} -errfile {log}"
 
 # fix sam file header and select only reads matching at position 1
 rule altersam:
     input:
         sam="{project}_output/needleall/{sample}.sam",
-        header="references/sam_header.tsv"
+        header="references/hspGESTALT_header.tsv"
     output:"{project}_output/bam/{sample}.bam"
     conda:"envs/tools-env.yaml"
     shell:"cat {input.header} <(grep -v ^@ {input.sam} | awk '{{if ($4==1){{print}}}}') | samtools view -hb | samtools sort> {output}"
@@ -167,7 +168,6 @@ rule dedup:
     conda:"envs/tools-env.yaml"
     shell:"umi_tools dedup --method=unique -I {input.bam} --output-stats= output/dedup/{wildcards.sample} -S {output}"
 
-
 rule analysis:
     input:umi_bam_switch
     output:touch("{project}_output/SABER/analysis.done")
@@ -178,5 +178,6 @@ rule analysis:
         conf= "config.yaml"
     shell:"""
     Rscript scripts/installrpy.R || :
-    Rscript scripts/analysis.R {params.conf} {params.bams} {params.out}
+    ##Rscript scripts/analysis.R {params.conf} {params.bams} {params.out}
+    Rscript scripts/analysis_customize.R {params.conf} {params.bams} {params.out}
     """

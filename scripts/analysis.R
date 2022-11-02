@@ -24,6 +24,9 @@ library(ggExtra)
 library(ggrepel)
 library(boot)
 library(yaml)
+
+#args <- c('../config.yaml', '../SABER_output/bam', '../SABER_output/SABER')
+
 config <- yaml.load_file(args[1])
 
 
@@ -44,8 +47,11 @@ config <- yaml.load_file(args[1])
 #Be sure this is correct before running!!!
 #enter the experiment data
 
-genome<-"SABER_pipeline4.fasta" # include .fasta.  Genome file has to be in genome folder.
+#genome <- "SABER_pipeline4.fasta" # include .fasta.  Genome file has to be in genome folder.
+#genome <- "hspGESTALT_amplicon.fa" # include .fasta.  Genome file has to be in genome folder.
+genome <- "hspGESTALT_amplicon_corrected.fa" # include .fasta.  Genome file has to be in genome folder.
 genome_fp<-paste0(getwd(),"/references/",genome)
+
 output_file<-"crispRvariants"#for the cripsrvariants plot and prefix on sample output csv and vaf plot
 group_name<-"crispRvariants"
 threshold<-200# number of reads below which they don't appear on the big crispr plot
@@ -70,9 +76,10 @@ mid_names<-tools::file_path_sans_ext(bam_files)
 
 
 #graphical parameters
-gp_crisprplot<-c("width" = 14, "height" = 3, "top.n" = 20)
+gp_crisprplot<-c("width" = 18, "height" = 9, "top.n" = 20)
 gp_sparsity<-c("width" = 3.5, "height" = 2.25, "fontsize" = 11)
-gp_heatmap<-c("width" = 3.6, "height" = 3.33, "read_cutoff" = 15000, "fontsize" = 11)
+## gp_heatmap<-c("width" = 3.6, "height" = 3.33, "read_cutoff" = 15000, "fontsize" = 11)
+gp_heatmap<-c("width" = 14, "height" = 12, "read_cutoff" = 1000, "fontsize" = 11)
 gp_sharing_curve_family<-c("width" = 3, "height" = 2.7, "fontsize" = 11)
 gp_curve_plot<-c("width" = 3, "height" = 2.7, "fontsize" = 11)
 gp_boot_corplot<-c("width" = 3, "height" = 2.7, "fontsize" = 11)
@@ -144,15 +151,21 @@ registerDoParallel(cl)
 
 group_desig<-rep(group_name, times=length(bam_fnames))
 md<-read.csv("references/blank_metadata.csv", header = TRUE)
+## md<-read.csv("../references/blank_metadata.csv", header = TRUE)
 newrow<-data.frame(bamfile=bam_fnames, directory=getwd(),Short.name=mid_names,Targeting.type="",sgRNA1="",sgRNA2="",Group=group_desig)
 md<-rbind(md,newrow)
 
 
 #create target region
-gd <- rtracklayer::import("references/SABER2.bed")
+## gd <- rtracklayer::import("references/hspGESTALT_amplicon.bed")
+gd <- rtracklayer::import("../references/hspGESTALT_amplicon.bed")
+
 gdl <- GenomicRanges::resize(gd, width(gd) + 0, fix = "center") #resize region for analysis
-reference0<-read_file("references/SABER2_ref.txt")
-reference1<-substr(reference0,1,310)
+## reference0<-read_file("references/hspGESTALT_amplicon_ref_corrected.txt")
+reference0<-read_file("../references/hspGESTALT_amplicon_ref_corrected.txt")
+
+#reference1<-substr(reference0,1,310)
+reference1<-substr(reference0,1,357)
 reference<-Biostrings::DNAString(reference1)
 reference
 
@@ -160,13 +173,10 @@ reference
 crispr_set <- readsToTarget(bam_fnames,
                             target = gd,
                             reference = reference,
-                            names = md$Short.name,
-                            target.loc = 16,
+                            names = as.vector(md$Short.name),
+                            target.loc = 17,
                             collapse.pairs = FALSE,
                             split.snv=FALSE)#split.snv=FALSE adds SNVs into no variant count
-
-
-
 
 
 #####generate informative, no variant and common variant tables with vaf and paf thresholds####
@@ -211,9 +221,12 @@ generate_v1<-function(x,thresh,vaf_thresh,paf_thresh,vc_prop,output_folder,outpu
 ####generate variant tables####
 vc_all <- as.data.frame(variantCounts(crispr_set), stringsAsFactors=FALSE)#big data frame of read counts
 vc_list<-list()
+
 for(i in 1:length(mid_names)){vc_list[[length(vc_list)+1]]<-vc_all[i]}#puts individual samples into a list of vectors
+
 vc_prop<-variantCounts(crispr_set, result = "proportions")# generates a matrix of variant allele percents, similar to vc_all
 vc_prop_decimal<-vc_prop/100
+
 
 thresh<-0;tvaf<-1;parLapply(cl,vc_list,generate_v1,thresh = thresh, vaf_thresh = tvaf, vc_prop = vc_prop_decimal,output_folder = output_folder, output_file = output_file)
 thresh<-0;tvaf<-0.3;parLapply(cl,vc_list,generate_v1,thresh = thresh, vaf_thresh = tvaf, vc_prop = vc_prop_decimal,output_folder = output_folder, output_file = output_file)
@@ -330,11 +343,15 @@ cor_func3<-function(include_uninformative, thresh, tvaf, method, output_folder){
   df_cor_wide0<-reshape(df_cor, idvar = "Variant", timevar = "Specimen", direction = "wide")
   df_cor_wide<-df_cor_wide0
   df_cor_wide[is.na(df_cor_wide)]<-0
-  colnames(df_cor_wide)<-substr(colnames(df_cor_wide),7,11)
+  ## print('--------------')
+  ## print(colnames(df_cor_wide))
+  ## print('--------------')
+  colnames(df_cor_wide)<-substr(colnames(df_cor_wide),7,35)
   rownames(df_cor_wide)<-df_cor_wide[,1]
+  ## print(head(df_cor_wide))
+
   df_cor_wide<-df_cor_wide[,-1]
   if (include_uninformative==TRUE) {df_cor_wide1<-df_cor_wide} else {df_cor_wide1<-df_cor_wide[-c(1,2),]}
-
 
   stat_matrix<-matrix(vector(),nrow = ncol(df_cor_wide1), ncol = ncol(df_cor_wide1))
   colnames(stat_matrix)<-colnames(df_cor_wide1)
@@ -366,6 +383,7 @@ cor_func3<-function(include_uninformative, thresh, tvaf, method, output_folder){
   sm_reordered<-reorder_cormat(stat_matrix)
   sm_lower<-get_lower_tri(sm_reordered)
 
+  ## print(head(sm_lower))
   msm<-melt(sm_lower)
 
   msm_plot<-ggplot(data = msm, aes(x = msm$Var1, y = msm$Var2, fill = msm$value))
@@ -858,17 +876,31 @@ cor_func4<-function(fidf_5_highfi, thresh, tvaf, method, output_folder){
   input_directory<-paste0(output_folder,"/thresh_",thresh,"_tvaf_",tvaf)
   #inlist<-list.files(input_directory,full.names = TRUE, pattern = "\\d.csv$")
   inlist<-list.files(input_directory,full.names = TRUE)
-  insample<-str_sub(inlist,-9,-5)
+  ## insample<-str_sub(inlist,-9,-5) # another hard-coded part
+  insample<- gsub('crispRvariants_', '', basename(tools::file_path_sans_ext(inlist)))
+
   inframe<-as.data.frame(cbind(inlist,insample))
+  print(str(inframe))
+  print(head(inframe))
+  print(dim(inframe))
+
   inlist1<-left_join(fidf_5_highfi,inframe,by = c("specimen" = "insample"))
+  print('test-----------------------')
+  print(head(inlist1))
   inlist1$inlist<-as.character(inlist1$inlist)
+  print('test-----------------------')
+
   df_cor<-data.frame(Variant = character(), Count = integer(), Specimen = character())
+  print(inlist1$inlist[[1]])
   for (i in 1:nrow(inlist1)){
     df_new<-read.csv(file = inlist1$inlist[i], header = TRUE)
+    print(head(df_new))
     df_new<-df_new[,c(3,2,7)]
     colnames(df_new)<-c("Variant", "Count", "Specimen")
     df_cor<-rbind(df_cor,df_new)
   }
+  print('test-----------------------')
+
   df_cor_wide0<-reshape(df_cor, idvar = "Variant", timevar = "Specimen", direction = "wide")
   df_cor_wide<-df_cor_wide0
   df_cor_wide[is.na(df_cor_wide)]<-0
@@ -876,6 +908,7 @@ cor_func4<-function(fidf_5_highfi, thresh, tvaf, method, output_folder){
   rownames(df_cor_wide)<-df_cor_wide[,1]
   df_cor_wide<-df_cor_wide[,-1]
   df_cor_wide1<-df_cor_wide[-c(1,2),]
+
 
   stat_matrix<-matrix(vector(),nrow = ncol(df_cor_wide1), ncol = ncol(df_cor_wide1))
   colnames(stat_matrix)<-colnames(df_cor_wide1)
@@ -965,10 +998,9 @@ msm_0.001_false_hifi<-select_hifi(data_in = msm_0.001_false, keeplist = fidf_5_h
 msm_0.0003_false_hifi<-select_hifi(data_in = msm_0.0003_false, keeplist = fidf_5_highfi$specimen)
 
 
-
-
 msm_hifi_list<-list(msm_1_true_hifi,msm_1_false_hifi,msm_0.3_false_hifi,msm_0.1_false_hifi,msm_0.03_false_hifi,msm_0.01_false_hifi,msm_0.003_false_hifi,msm_0.001_false_hifi,msm_0.0003_false_hifi)
 msm_hifi<-dplyr::bind_rows(msm_hifi_list)
+
 msm_hifi$condition<-paste0(msm_hifi$tvaf,"_",msm_hifi$include_uninformative)
 msm_hifi$condition<-factor(msm_hifi$condition, levels = unique(msm_hifi$condition))
 
@@ -1020,8 +1052,11 @@ grp<-fidf_5 %>% arrange(specimen) %>% pull(boot_clust)# %>% recode("High FI" = 1
 grp<-factor(grp, levels = c("High FI", "Low FI"))
 #grp_colors<-c()
 # plot the variants
+## ps<-37
+## pam_seq<-seq(ps,280,27)
+
 ps<-37
-pam_seq<-seq(ps,280,27)
+pam_seq<-seq(ps, 355, 27)
 
 #while (!is.null(dev.list())) dev.off()
 pdf(file=paste0(output_folder,"/",output_file,".pdf"), width = unname(gp_crisprplot["width"]), height = unname(gp_crisprplot["height"]))
@@ -1054,4 +1089,5 @@ dev.off()
 # unlink("fastq", recursive = TRUE)
 # dir.create("fastq")
 # system(paste0("cp analysis_resub_vfinal.R ",output_folder,"/analysis_resub_vfinal.R"))
+
 save.image(paste0(output_folder,"/rdata.RData"))
